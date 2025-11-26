@@ -1,0 +1,71 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+}
+
+enum BundleOptionScope {
+  SHARED
+  PER_ITEM
+}
+
+model Bundle {
+  id          String        @id @default(cuid())
+  shopDomain  String
+  title       String
+  handle      String        @unique
+  description String?
+  imageUrl    String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  items   BundleItem[]
+  options BundleOption[]
+}
+
+model BundleItem {
+  id           String   @id @default(cuid())
+  bundleId     String
+  productId    String   // Shopify product ID as string
+  productTitle String?  // cached title for convenience
+  displayLabel String?  // optional override label
+  sortOrder    Int      @default(0)
+
+  bundle Bundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+}
+
+model BundleOption {
+  id         String            @id @default(cuid())
+  bundleId   String
+  optionName String
+  scope      BundleOptionScope @default(PER_ITEM)
+
+  bundle Bundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+}

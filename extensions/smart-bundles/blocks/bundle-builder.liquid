@@ -1,0 +1,308 @@
+<div
+  class="smart-bundle-block"
+  data-bundle-id="{{ block.settings.bundle_id | escape }}"
+>
+  <div class="sb-loading">Loading bundle…</div>
+  <div class="sb-output"></div>
+</div>
+
+<script>
+  (function () {
+    function initSmartBundleBlocks() {
+      var blocks = document.querySelectorAll(".smart-bundle-block");
+      blocks.forEach(function (block) {
+        if (block.dataset.sbInitialized === "true") return;
+        block.dataset.sbInitialized = "true";
+
+        var bundleId = block.dataset.bundleId;
+        var loadingEl = block.querySelector(".sb-loading");
+        var outputEl = block.querySelector(".sb-output");
+
+        if (!outputEl) return;
+
+        if (!bundleId) {
+          if (loadingEl) loadingEl.textContent = "No bundle selected.";
+          return;
+        }
+
+        var url = "/apps/smart-bundles?id=" + encodeURIComponent(bundleId);
+
+        fetch(url)
+          .then(function (r) {
+            console.log("[Smart Bundles] Proxy status:", r.status);
+            if (!r.ok) {
+              // 4xx/5xx – don't try to JSON parse HTML error pages
+              throw new Error("Proxy request failed with status " + r.status);
+            }
+            return r.json();
+          })
+          .then(function (data) {
+            console.log("[Smart Bundles] Proxy JSON:", data);
+
+            if (loadingEl) loadingEl.style.display = "none";
+
+            if (data.error) {
+              outputEl.textContent = "Bundle not found.";
+              return;
+            }
+
+            var title = data.title || "";
+            var description = data.description || "";
+            var items = Array.isArray(data.items) ? data.items : [];
+
+            outputEl.innerHTML = renderBundleHtml(title, description, items);
+
+            var addBtn = outputEl.querySelector(".sb-add-bundle");
+            if (addBtn) {
+              addBtn.addEventListener("click", function () {
+                addBundleToCart(data, items, outputEl);
+              });
+            }
+          })
+          .catch(function (err) {
+            console.error("[Smart Bundles] Error loading bundle:", err);
+            if (loadingEl) loadingEl.textContent = "Error loading bundle.";
+          });
+      });
+    }
+
+    function renderBundleHtml(title, description, items) {
+      return `
+        <div class="sb-bundle">
+          <div class="sb-bundle-header">
+            <h2 class="sb-bundle-title">${title}</h2>
+            ${description ? `<p class="sb-bundle-description">${description}</p>` : ""}
+          </div>
+
+          <div class="sb-items">
+            ${items.map(function(item, index) {
+              var label = item.displayLabel || item.productId || ("Item " + (index + 1));
+              return `
+                <div class="sb-item" data-item-id="${item.id}">
+                  <div class="sb-item-label">${label}</div>
+                  <div class="sb-item-meta">
+                    <span class="sb-item-id">Product ID: ${item.productId}</span>
+                  </div>
+                  <div class="sb-item-options">
+                    <!-- Options / variants UI will go here later -->
+                    <em>Options coming soon</em>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+
+          <div class="sb-footer">
+            <button type="button" class="sb-add-bundle">
+              Add bundle to cart
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- helpers ----------
+
+    function generateBundleKey() {
+      return (
+        "sb-" +
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 8)
+      );
+    }
+
+    // MVP: treat productId as the *product handle*
+    // e.g. "gift-card", "my-product-handle"
+    function productIdToHandle(productId) {
+      if (!productId) return null;
+
+      // If a GID was stored, bail for now – we’ll support this later.
+      if (productId.indexOf("gid://") === 0) {
+        console.warn("[Smart Bundles] GID productId not supported yet:", productId);
+        return null;
+      }
+
+      // If it's numeric (like "1"), also treat as invalid for now
+      if (/^\d+$/.test(productId)) {
+        console.warn("[Smart Bundles] Numeric productId not supported yet:", productId);
+        return null;
+      }
+
+      // Otherwise assume it's already the handle.
+      return productId;
+    }
+
+    // Fetch product JSON by handle and grab first variant ID
+    function fetchFirstVariantId(productHandle) {
+      return fetch("/products/" + productHandle + ".js")
+        .then(function (r) {
+          if (!r.ok) {
+            throw new Error("Product JSON failed for handle " + productHandle + " (status " + r.status + ")");
+          }
+          return r.json();
+        })
+        .then(function (product) {
+          if (!product || !product.variants || !product.variants.length) {
+            throw new Error("No variants for product " + productHandle);
+          }
+          return product.variants[0].id;
+        });
+    }
+
+    function addBundleToCart(bundleData, items, outputEl) {
+      var bundleKey = generateBundleKey();
+      var title = bundleData.title || "Bundle";
+
+      // Filter to only items we can resolve
+      var resolvableItems = items.filter(function (item, index) {
+        var handle = productIdToHandle(item.productId);
+        return !!handle;
+      });
+
+      if (!resolvableItems.length) {
+        alert(
+          "This bundle has no resolvable products yet. " +
+          "Make sure product IDs in the bundle are product handles (e.g. 'gift-card')."
+        );
+        return;
+      }
+
+      var variantPromises = resolvableItems.map(function (item, index) {
+        var handle = productIdToHandle(item.productId);
+        return fetchFirstVariantId(handle).then(function (variantId) {
+          return {
+            variantId: variantId,
+            item: item,
+            index: index
+          };
+        });
+      });
+
+      Promise.all(variantPromises)
+        .then(function (results) {
+          var lineItems = results.map(function (res, idx) {
+            var label =
+              res.item.displayLabel ||
+              res.item.productId ||
+              "Item " + (idx + 1);
+
+            return {
+              id: res.variantId,
+              quantity: res.item.quantity || 1,
+              properties: {
+                Bundle: title,
+                _bundle_key: bundleKey,
+                Component: label
+              }
+            };
+          });
+
+          console.log("[Smart Bundles] Adding line items:", lineItems);
+
+          return fetch("/cart/add.js", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json"
+            },
+            body: JSON.stringify({ items: lineItems })
+          });
+        })
+        .then(function (r) {
+          if (!r.ok) {
+            throw new Error("cart/add.js failed with status " + r.status);
+          }
+          return r.json();
+        })
+        .then(function (cartResponse) {
+          console.log("[Smart Bundles] Cart response:", cartResponse);
+          alert("Bundle added to cart!");
+          // MVP: simple redirect to cart (later we'll integrate the drawer)
+          window.location.href = "/cart";
+        })
+        .catch(function (err) {
+          console.error("[Smart Bundles] Error adding bundle:", err);
+          alert("Sorry, there was a problem adding the bundle to your cart.");
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", initSmartBundleBlocks);
+    document.addEventListener("shopify:section:load", initSmartBundleBlocks);
+    document.addEventListener("shopify:block:select", initSmartBundleBlocks);
+  })();
+</script>
+
+<style>
+  .smart-bundle-block .sb-bundle {
+    border: 1px solid #e1e3e5;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+  }
+
+  .smart-bundle-block .sb-bundle-title {
+    margin: 0 0 0.25rem;
+  }
+
+  .smart-bundle-block .sb-bundle-description {
+    margin: 0 0 1rem;
+    color: #6d7175;
+  }
+
+  .smart-bundle-block .sb-items {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .smart-bundle-block .sb-item {
+    border: 1px solid #e1e3e5;
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .smart-bundle-block .sb-item-label {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  .smart-bundle-block .sb-item-meta {
+    font-size: 0.8rem;
+    color: #6d7175;
+    margin-bottom: 0.5rem;
+  }
+
+  .smart-bundle-block .sb-footer {
+    text-align: right;
+  }
+
+  .smart-bundle-block .sb-add-bundle {
+    padding: 0.6rem 1.4rem;
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    background: #000;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .smart-bundle-block .sb-add-bundle:hover {
+    opacity: 0.9;
+  }
+</style>
+
+{% schema %}
+{
+  "name": "Smart Bundle builder",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "bundle_id",
+      "label": "Bundle ID",
+      "info": "Paste the Bundle ID from the Smart Bundles app."
+    }
+  ]
+}
+{% endschema %}
