@@ -37,28 +37,45 @@
             return r.json();
           })
           .then(function (data) {
-            console.log("[Smart Bundles] Proxy JSON:", data);
+          if (loadingEl) loadingEl.style.display = "none";
 
-            if (loadingEl) loadingEl.style.display = "none";
+          if (data.error) {
+            outputEl.textContent = "Bundle not found.";
+            return;
+          }
 
-            if (data.error) {
-              outputEl.textContent = "Bundle not found.";
-              return;
-            }
+          var title = data.title || "";
+          var description = data.description || "";
+          var items = Array.isArray(data.items) ? data.items : [];
 
-            var title = data.title || "";
-            var description = data.description || "";
-            var items = Array.isArray(data.items) ? data.items : [];
+          // Build client-side state:
+          // - fetch product JSON for each item
+          // - compute shared + per-item options
+          buildClientBundleState(items)
+            .then(function (state) {
+              // Store everything on the block so other helpers can access it
+              block._sbState = {
+                bundleData: data,
+                items: state.itemsWithProducts,       // items + product JSON
+                sharedOptions: state.sharedOptions,   // [{ name, values }]
+                perItemOptions: state.perItemOptions  // { itemId: [{...}] }
+              };
 
-            outputEl.innerHTML = renderBundleHtml(title, description, items);
+              outputEl.innerHTML = renderBundleHtml(
+                title,
+                description,
+                block._sbState.items,
+                block._sbState.sharedOptions,
+                block._sbState.perItemOptions
+              );
 
-            var addBtn = outputEl.querySelector(".sb-add-bundle");
-            if (addBtn) {
-              addBtn.addEventListener("click", function () {
-                addBundleToCart(data, items, outputEl);
-              });
-            }
-          })
+              wireBundleEvents(block, outputEl);
+            })
+            .catch(function (err) {
+              console.error("[Smart Bundles] Error preparing bundle:", err);
+              outputEl.textContent = "Error preparing bundle.";
+            });
+        })
           .catch(function (err) {
             console.error("[Smart Bundles] Error loading bundle:", err);
             if (loadingEl) loadingEl.textContent = "Error loading bundle.";
@@ -66,42 +83,591 @@
       });
     }
 
-    function renderBundleHtml(title, description, items) {
+        // ---------- helpers for HTML ----------
+
+    function escapeHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    // ---------- client-side options logic (mirror of computeBundleOptions) ----------
+
+    function normalizeValues(values) {
+      if (!values) return [];
+      var cleaned = values
+        .map(function (v) { return String(v || "").trim(); })
+        .filter(function (v) { return v.length > 0; });
+
+      var map = {};
+      cleaned.forEach(function (v) { map[v] = true; });
+      return Object.keys(map).sort(function (a, b) {
+        return a.localeCompare(b, undefined, { sensitivity: "base" });
+      });
+    }
+
+    function buildOptionKey(option) {
+      return String(option.name || "").trim() + "::" + (option.values || []).join("|");
+    }
+
+    function computeBundleOptionsClient(products) {
+      var result = {
+        sharedOptions: [],
+        perProductOptions: {}
+      };
+
+      if (!products || !products.length) return result;
+
+      var numProducts = products.length;
+      var perProductNormalized = {};
+      var optionKeyCounts = {};
+
+      products.forEach(function (product) {
+        var normalizedOptions = (product.options || [])
+          .filter(function (opt) { return opt && opt.name; })
+          .map(function (opt) {
+            return {
+              name: String(opt.name || "").trim(),
+              values: normalizeValues(opt.values || [])
+            };
+          });
+
+        perProductNormalized[product.id] = normalizedOptions;
+
+        var seenKeys = {};
+        normalizedOptions.forEach(function (opt) {
+          var key = buildOptionKey(opt);
+          if (seenKeys[key]) return;
+          seenKeys[key] = true;
+          optionKeyCounts[key] = (optionKeyCounts[key] || 0) + 1;
+        });
+      });
+
+      var sharedKeys = {};
+      if (numProducts > 1) {
+        Object.keys(optionKeyCounts).forEach(function (key) {
+          if (optionKeyCounts[key] === numProducts) {
+            sharedKeys[key] = true;
+          }
+        });
+      }
+
+      var keyToOption = {};
+      Object.keys(perProductNormalized).forEach(function (productId) {
+        perProductNormalized[productId].forEach(function (opt) {
+          var key = buildOptionKey(opt);
+          if (!keyToOption[key]) keyToOption[key] = opt;
+        });
+      });
+
+      result.sharedOptions = Object.keys(sharedKeys).map(function (key) {
+        return keyToOption[key];
+      });
+
+      Object.keys(perProductNormalized).forEach(function (productId) {
+        result.perProductOptions[productId] =
+          perProductNormalized[productId].filter(function (opt) {
+            return !sharedKeys[buildOptionKey(opt)];
+          });
+      });
+
+      return result;
+    }
+
+    // Build our compute input from Shopify /products/{handle}.js JSON
+    function buildProductOptionsForCompute(itemId, productJson) {
+  var options = [];
+
+  if (!productJson || !Array.isArray(productJson.options)) {
+    return {
+      id: itemId,
+      title: (productJson && productJson.title) || "",
+      options: []
+    };
+  }
+
+  var variants = Array.isArray(productJson.variants)
+    ? productJson.variants
+    : [];
+
+  productJson.options.forEach(function (optionDef, idx) {
+    // optionDef may be a string ("Color") or an object ({ name: "Color", ... })
+    var optionName = "";
+
+    if (typeof optionDef === "string") {
+      optionName = optionDef;
+    } else if (
+      optionDef &&
+      typeof optionDef.name === "string"
+    ) {
+      optionName = optionDef.name;
+    }
+
+    optionName = String(optionName || "").trim();
+    if (!optionName) return;
+
+    var valuesMap = {};
+
+    variants.forEach(function (variant) {
+      if (!variant || !Array.isArray(variant.options)) return;
+      var val = variant.options[idx];
+      if (val == null) return;
+      var key = String(val).trim();
+      if (!key) return;
+      valuesMap[key] = true;
+    });
+
+    options.push({
+      name: optionName,
+      values: Object.keys(valuesMap)
+    });
+  });
+
+  return {
+    id: itemId,
+    title: productJson.title || "",
+    options: options
+  };
+}
+
+
+    function fetchProductJson(handle) {
+      return fetch("/products/" + handle + ".js")
+        .then(function (r) {
+          if (!r.ok) {
+            throw new Error("Product JSON failed for handle " + handle + " (status " + r.status + ")");
+          }
+          return r.json();
+        });
+    }
+
+    // Fetch products + compute shared/per-item options
+    function buildClientBundleState(items) {
+      var resolvable = (items || []).filter(function (item) {
+        return !!productIdToHandle(item.productId);
+      });
+
+      if (!resolvable.length) {
+        return Promise.resolve({
+          itemsWithProducts: [],
+          sharedOptions: [],
+          perItemOptions: {}
+        });
+      }
+
+      var productPromises = resolvable.map(function (item) {
+        var handle = productIdToHandle(item.productId);
+        return fetchProductJson(handle)
+          .then(function (productJson) {
+            return { item: item, handle: handle, product: productJson };
+          })
+          .catch(function (err) {
+            console.error("[Smart Bundles] Error fetching product JSON for", handle, err);
+            return null;
+          });
+      });
+
+      return Promise.all(productPromises).then(function (results) {
+        var itemsWithProducts = [];
+        var computeInput = [];
+
+        results.forEach(function (res) {
+          if (!res || !res.product) return;
+
+          var itemWithProduct = Object.assign({}, res.item, {
+            handle: res.handle,
+            product: res.product
+          });
+          itemsWithProducts.push(itemWithProduct);
+
+          computeInput.push(
+            buildProductOptionsForCompute(res.item.id, res.product)
+          );
+        });
+
+        var bundleOptions = computeBundleOptionsClient(computeInput);
+
+        // bundleOptions.perProductOptions uses the item.id as key
+        return {
+          itemsWithProducts: itemsWithProducts,
+          sharedOptions: bundleOptions.sharedOptions,
+          perItemOptions: bundleOptions.perProductOptions
+        };
+      });
+    }
+
+
+        function renderBundleHtml(title, description, items, sharedOptions, perItemOptions) {
+      sharedOptions = sharedOptions || [];
+      perItemOptions = perItemOptions || {};
+
       return `
         <div class="sb-bundle">
           <div class="sb-bundle-header">
-            <h2 class="sb-bundle-title">${title}</h2>
-            ${description ? `<p class="sb-bundle-description">${description}</p>` : ""}
+            <h2 class="sb-bundle-title">${escapeHtml(title)}</h2>
+            ${
+              description
+                ? `<p class="sb-bundle-description">${escapeHtml(description)}</p>`
+                : ""
+            }
           </div>
+
+          ${
+            sharedOptions.length
+              ? `
+          <div class="sb-shared-options">
+            <h3 class="sb-options-heading">Bundle options (shared)</h3>
+            <div class="sb-options-group">
+              ${sharedOptions
+  .map(function (opt) {
+    var valuesHtml = (opt.values || [])
+      .map(function (val) {
+        return `<option value="${escapeHtml(
+          val
+        )}">${escapeHtml(val)}</option>`;
+      })
+      .join("");
+    return `
+      <div class="sb-option sb-option--shared">
+        <label class="sb-option-label">${escapeHtml(String(opt.name || ""))}</label>
+        <select
+          class="sb-option-select"
+          data-scope="shared"
+          data-option-name="${escapeHtml(String(opt.name || ""))}"
+        >
+          ${valuesHtml}
+        </select>
+      </div>
+    `;
+  })
+  .join("")}
+
+            </div>
+          </div>
+          `
+              : ""
+          }
 
           <div class="sb-items">
-            ${items.map(function(item, index) {
-              var label = item.displayLabel || item.productId || ("Item " + (index + 1));
-              return `
-                <div class="sb-item" data-item-id="${item.id}">
-                  <div class="sb-item-label">${label}</div>
-                  <div class="sb-item-meta">
-                    <span class="sb-item-id">Product ID: ${item.productId}</span>
+            ${items
+              .map(function (item, index) {
+                var label =
+                  item.displayLabel ||
+                  item.productId ||
+                  "Item " + (index + 1);
+                var itemOpts = perItemOptions[item.id] || [];
+                var itemOptionsHtml =
+                  itemOpts.length === 0
+                    ? `<em>No additional options for this item.</em>`
+                    : itemOpts
+                        .map(function (opt) {
+                          var valuesHtml = (opt.values || [])
+                            .map(function (val) {
+                              return `<option value="${escapeHtml(
+                                val
+                              )}">${escapeHtml(val)}</option>`;
+                            })
+                            .join("");
+                          return `
+                            <div class="sb-option sb-option--item">
+                              <label class="sb-option-label">${escapeHtml(opt.name)}</label>
+                              <select
+                                class="sb-option-select"
+                                data-scope="per-item"
+                                data-item-id="${escapeHtml(item.id)}"
+                                data-option-name="${escapeHtml(opt.name)}"
+                              >
+                                ${valuesHtml}
+                              </select>
+                            </div>
+                          `;
+                        })
+                        .join("");
+
+                return `
+                  <div class="sb-item" data-item-id="${escapeHtml(String(item.id || ""))}">
+                    <div class="sb-item-header">
+                      <div class="sb-item-label">${escapeHtml(label)}</div>
+                      <div class="sb-item-price" data-item-price-for="${escapeHtml(String(item.id || ""))}">
+                        <!-- price filled by JS -->
+                      </div>
+                    </div>
+                    <div class="sb-item-meta">
+                      <span class="sb-item-id">Product ID: ${escapeHtml(
+                        item.productId
+                      )}</span>
+                    </div>
+                    <div class="sb-item-options">
+                      ${itemOptionsHtml}
+                    </div>
                   </div>
-                  <div class="sb-item-options">
-                    <!-- Options / variants UI will go here later -->
-                    <em>Options coming soon</em>
-                  </div>
-                </div>
-              `;
-            }).join("")}
+                `;
+              })
+              .join("")}
           </div>
 
-          <div class="sb-footer">
-            <button type="button" class="sb-add-bundle">
-              Add bundle to cart
-            </button>
+                    <div class="sb-footer">
+            <div class="sb-footer-main">
+              <div class="sb-bundle-qty-total">
+                <div class="sb-bundle-qty">
+                  <span>Bundle quantity</span>
+                  <div class="sb-bundle-qty-controls">
+                    <button type="button" class="sb-qty-btn sb-qty-minus">−</button>
+                    <input
+                      type="number"
+                      class="sb-bundle-qty-input"
+                      value="1"
+                      min="1"
+                      step="1"
+                    />
+                    <button type="button" class="sb-qty-btn sb-qty-plus">+</button>
+                  </div>
+                </div>
+                <div class="sb-bundle-total">
+                  <span>Bundle total</span>
+                  <div class="sb-bundle-total-price">–</div>
+                </div>
+              </div>
+              <button type="button" class="sb-add-bundle">
+                Add bundle to cart
+              </button>
+            </div>
           </div>
+
         </div>
       `;
     }
 
+        function wireBundleEvents(block, outputEl) {
+      var addBtn = outputEl.querySelector(".sb-add-bundle");
+      if (addBtn) {
+        addBtn.addEventListener("click", function () {
+          addBundleToCart(block, outputEl);
+        });
+      }
+
+      // Update prices when options change
+      var optionSelects = outputEl.querySelectorAll(".sb-option-select");
+      optionSelects.forEach(function (sel) {
+        sel.addEventListener("change", function () {
+          updateBundlePrices(block, outputEl);
+        });
+      });
+
+      // Quantity controls
+      var minus = outputEl.querySelector(".sb-qty-minus");
+      var plus = outputEl.querySelector(".sb-qty-plus");
+      var qtyInput = outputEl.querySelector(".sb-bundle-qty-input");
+
+      if (minus) {
+        minus.addEventListener("click", function () {
+          var current = getBundleQuantity(outputEl);
+          setBundleQuantity(outputEl, current - 1);
+          updateBundlePrices(block, outputEl);
+        });
+      }
+
+      if (plus) {
+        plus.addEventListener("click", function () {
+          var current = getBundleQuantity(outputEl);
+          setBundleQuantity(outputEl, current + 1);
+          updateBundlePrices(block, outputEl);
+        });
+      }
+
+      if (qtyInput) {
+        qtyInput.addEventListener("change", function () {
+          var current = getBundleQuantity(outputEl);
+          setBundleQuantity(outputEl, current);
+          updateBundlePrices(block, outputEl);
+        });
+      }
+
+      // Initial price render
+      updateBundlePrices(block, outputEl);
+    }
+
+        function updateBundlePrices(block, outputEl) {
+      var state = block._sbState || {};
+      var items = state.items || [];
+      var sharedSelections = getSelectedSharedOptions(outputEl);
+
+      var bundleSubtotalCents = 0;
+
+      items.forEach(function (item) {
+        var perItemSelections = getSelectedItemOptions(outputEl, item.id);
+        var variantId = findVariantIdForSelections(
+          item.product,
+          sharedSelections,
+          perItemSelections
+        );
+
+        var itemPriceEl = outputEl.querySelector(
+          '.sb-item-price[data-item-price-for="' + item.id + '"]'
+        );
+
+        var variant = null;
+        if (variantId && item.product && Array.isArray(item.product.variants)) {
+          variant = item.product.variants.find(function (v) {
+            return String(v.id) === String(variantId);
+          });
+        }
+
+        var quantityBase = item.quantity || 1;
+        var rawPrice = variant ? Number(variant.price) : 0;
+if (isNaN(rawPrice)) rawPrice = 0;
+
+// If it's in cents already (e.g. 4995) keep it;
+// if it's in units (e.g. 49.95) convert to cents.
+var priceCents =
+  rawPrice > 1000 ? rawPrice : Math.round(rawPrice * 100);
+        var lineSubtotalCents = priceCents * quantityBase;
+
+        bundleSubtotalCents += lineSubtotalCents;
+
+        if (itemPriceEl) {
+          if (variant) {
+            itemPriceEl.textContent =
+              formatMoney(priceCents) +
+              (quantityBase > 1
+                ? " × " + quantityBase
+                : "");
+          } else {
+            itemPriceEl.textContent = "—";
+          }
+        }
+      });
+
+      var bundleQty = getBundleQuantity(outputEl);
+      var totalCents = bundleSubtotalCents * bundleQty;
+      var totalEl = outputEl.querySelector(".sb-bundle-total-price");
+      if (totalEl) {
+        totalEl.textContent = formatMoney(totalCents);
+      }
+    }
+
+
+
+    function getSelectedSharedOptions(rootEl) {
+      var map = {};
+      var selects = rootEl.querySelectorAll(
+        '.sb-option-select[data-scope="shared"]'
+      );
+      selects.forEach(function (sel) {
+        var name = sel.getAttribute("data-option-name");
+        var value = sel.value;
+        if (name && value) {
+          map[name] = value;
+        }
+      });
+      return map;
+    }
+
+    function getSelectedItemOptions(rootEl, itemId) {
+      var map = {};
+      var selector =
+        '.sb-option-select[data-scope="per-item"][data-item-id="' +
+        itemId +
+        '"]';
+      var selects = rootEl.querySelectorAll(selector);
+      selects.forEach(function (sel) {
+        var name = sel.getAttribute("data-option-name");
+        var value = sel.value;
+        if (name && value) {
+          map[name] = value;
+        }
+      });
+      return map;
+    }
+
+    function findVariantIdForSelections(product, shared, perItem) {
+  if (
+    !product ||
+    !Array.isArray(product.variants) ||
+    !product.variants.length
+  ) {
+    return null;
+  }
+
+  // Normalise product.options into an array of *names* (strings)
+  var rawOptionDefs = Array.isArray(product.options)
+    ? product.options
+    : [];
+
+  var optionNames = rawOptionDefs.map(function (def) {
+    if (typeof def === "string") {
+      return def;
+    }
+    if (def && typeof def.name === "string") {
+      return def.name;
+    }
+    return "";
+  });
+
+  // Every defined option must have a chosen value
+  var chosenByIndex = optionNames.map(function (name) {
+    var n = String(name || "").trim();
+    return perItem[n] || shared[n] || null;
+  });
+
+  if (
+    chosenByIndex.some(function (v) {
+      return v === null;
+    })
+  ) {
+    return null;
+  }
+
+  var matching = product.variants.find(function (variant) {
+    if (!Array.isArray(variant.options)) return false;
+    for (var i = 0; i < optionNames.length; i++) {
+      var want = String(chosenByIndex[i]).trim();
+      var got = String(variant.options[i] || "").trim();
+      if (want !== got) return false;
+    }
+    return true;
+  });
+
+  return matching ? matching.id : null;
+}
+
+
+
+
     // ---------- helpers ----------
+
+        // ---------- money + quantity helpers ----------
+
+    function formatMoney(cents) {
+      var intCents = parseInt(cents, 10);
+      if (isNaN(intCents)) intCents = 0;
+
+      // Prefer Shopify.formatMoney if available
+      if (window.Shopify && typeof Shopify.formatMoney === "function") {
+        return Shopify.formatMoney(intCents, window.theme && theme.moneyFormat || "{{amount}}");
+      }
+
+      // Fallback £0.00 style
+      var value = (intCents / 100).toFixed(2);
+      return "£" + value;
+    }
+
+    function getBundleQuantity(rootEl) {
+      var input = rootEl.querySelector(".sb-bundle-qty-input");
+      var val = input ? parseInt(input.value, 10) : 1;
+      if (isNaN(val) || val < 1) val = 1;
+      return val;
+    }
+
+    function setBundleQuantity(rootEl, qty) {
+      if (qty < 1) qty = 1;
+      var input = rootEl.querySelector(".sb-bundle-qty-input");
+      if (input) input.value = String(qty);
+    }
+
 
     function generateBundleKey() {
       return (
@@ -150,65 +716,86 @@
         });
     }
 
-    function addBundleToCart(bundleData, items, outputEl) {
+        function addBundleToCart(block, outputEl) {
+      var state = block._sbState || {};
+      var bundleData = state.bundleData || {};
+      var items = state.items || [];
+
       var bundleKey = generateBundleKey();
       var title = bundleData.title || "Bundle";
 
-      // Filter to only items we can resolve
-      var resolvableItems = items.filter(function (item, index) {
-        var handle = productIdToHandle(item.productId);
-        return !!handle;
-      });
-
-      if (!resolvableItems.length) {
-        alert(
-          "This bundle has no resolvable products yet. " +
-          "Make sure product IDs in the bundle are product handles (e.g. 'gift-card')."
-        );
+      if (!items.length) {
+        alert("This bundle has no resolvable products yet.");
         return;
       }
 
-      var variantPromises = resolvableItems.map(function (item, index) {
+      var sharedSelections = getSelectedSharedOptions(outputEl);
+
+      var lineItems = [];
+
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+
         var handle = productIdToHandle(item.productId);
-        return fetchFirstVariantId(handle).then(function (variantId) {
-          return {
-            variantId: variantId,
-            item: item,
-            index: index
-          };
+        if (!handle || !item.product) {
+          console.warn(
+            "[Smart Bundles] Skipping item with unresolved product",
+            item
+          );
+          continue;
+        }
+
+        var perItemSelections = getSelectedItemOptions(
+          outputEl,
+          item.id
+        );
+
+        var variantId = findVariantIdForSelections(
+          item.product,
+          sharedSelections,
+          perItemSelections
+        );
+
+        var label =
+          item.displayLabel ||
+          item.productId ||
+          "Item " + (i + 1);
+
+        var bundleQuantity = getBundleQuantity(outputEl);
+
+        if (!variantId) {
+          alert(
+            "Please select all options for “" +
+              label +
+              "” before adding the bundle to your cart."
+          );
+          return;
+        }
+
+        lineItems.push({
+          id: variantId,
+          quantity: (item.quantity || 1) * bundleQuantity,
+          properties: {
+            Bundle: title,
+            _bundle_key: bundleKey,
+            Component: label
+          }
         });
-      });
+      }
 
-      Promise.all(variantPromises)
-        .then(function (results) {
-          var lineItems = results.map(function (res, idx) {
-            var label =
-              res.item.displayLabel ||
-              res.item.productId ||
-              "Item " + (idx + 1);
+      if (!lineItems.length) {
+        alert("This bundle has no resolvable products yet.");
+        return;
+      }
 
-            return {
-              id: res.variantId,
-              quantity: res.item.quantity || 1,
-              properties: {
-                Bundle: title,
-                _bundle_key: bundleKey,
-                Component: label
-              }
-            };
-          });
-
-          console.log("[Smart Bundles] Adding line items:", lineItems);
-
-          return fetch("/cart/add.js", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json"
-            },
-            body: JSON.stringify({ items: lineItems })
-          });
-        })
+      fetch("/cart/add.js", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({ items: lineItems })
+      })
         .then(function (r) {
           if (!r.ok) {
             throw new Error("cart/add.js failed with status " + r.status);
@@ -218,14 +805,16 @@
         .then(function (cartResponse) {
           console.log("[Smart Bundles] Cart response:", cartResponse);
           alert("Bundle added to cart!");
-          // MVP: simple redirect to cart (later we'll integrate the drawer)
           window.location.href = "/cart";
         })
         .catch(function (err) {
           console.error("[Smart Bundles] Error adding bundle:", err);
-          alert("Sorry, there was a problem adding the bundle to your cart.");
+          alert(
+            "Sorry, there was a problem adding the bundle to your cart."
+          );
         });
     }
+
 
     document.addEventListener("DOMContentLoaded", initSmartBundleBlocks);
     document.addEventListener("shopify:section:load", initSmartBundleBlocks);
