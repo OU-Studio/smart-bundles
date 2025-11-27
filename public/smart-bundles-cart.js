@@ -1,5 +1,5 @@
 (function () {
-  // ------------- utilities -------------
+  // ----------------- small helpers -----------------
 
   function onReady(fn) {
     if (document.readyState === "loading") {
@@ -9,7 +9,14 @@
     }
   }
 
-  function injectCartStyles() {
+  function log() {
+    if (!window.SB_CART_DEBUG) return;
+    var args = Array.prototype.slice.call(arguments);
+    args.unshift("[Smart Bundles Cart]");
+    console.log.apply(console, args);
+  }
+
+  function injectStyles() {
     if (document.getElementById("sb-cart-bundle-styles")) return;
 
     var css = `
@@ -47,7 +54,13 @@
       }
 
       .sb-cart-bundle.sb-cart-bundle--open .sb-cart-bundle-item {
-        display: block;
+        display: table-row;
+      }
+
+      /* list-style carts */
+      .sb-cart-bundle.sb-cart-bundle--open .sb-cart-bundle-item.sqs-li,
+      .sb-cart-bundle.sb-cart-bundle--open li.sb-cart-bundle-item {
+        display: list-item;
       }
 
       .sb-cart-bundle .cart-item,
@@ -81,13 +94,6 @@
     document.head.appendChild(style);
   }
 
-  function log() {
-    if (!window.SB_CART_DEBUG) return;
-    var args = Array.prototype.slice.call(arguments);
-    args.unshift("[Smart Bundles Cart]");
-    console.log.apply(console, args);
-  }
-
   function formatMoney(cents) {
     var intCents = parseInt(cents, 10);
     if (isNaN(intCents)) intCents = 0;
@@ -103,7 +109,7 @@
     return "£" + value;
   }
 
-  // ----- cart scope helpers (avoid header drawers etc.) -----
+  // --------- cart scope (avoid header/drawers) ----------
 
   var CART_SCOPE = null;
 
@@ -140,7 +146,7 @@
     );
   }
 
-  // ----- DOM finders -----
+  // ------------- row + qty helpers ----------------
 
   function findCartRowForItem(item) {
     if (!item) return null;
@@ -150,21 +156,27 @@
     var variantId = item.variant_id;
     var handle = item.handle;
 
-    // 1) data-cart-item-key (Dawn-style and many others)
+    // 1) data-key / data-cart-item-key
     if (key) {
-      var dataEl = root.querySelector('[data-key="' + key + '"], [data-cart-item-key="' + key + '"]');
+      var dataEl = root.querySelector(
+        '[data-key="' +
+          key +
+          '"], [data-cart-item-key="' +
+          key +
+          '"]'
+      );
       if (dataEl && dataEl.closest) {
         var row1 = dataEl.closest(
           ".cart-items__table-row, .cart-item, .cart__row, li, tr, .cart-line-item"
         );
         if (row1 && !isInsideDrawerOrMenu(row1)) {
-          log("Found row via data-key / data-cart-item-key", key, row1);
+          log("Found row via data-key", key, row1);
           return row1;
         }
       }
     }
 
-    // 2) hidden input with variant id
+    // 2) inputs with variant id
     if (variantId) {
       var variantSelectors = [
         'input[name="id[]"][value="' + variantId + '"]',
@@ -172,9 +184,9 @@
         '[data-variant-id="' + variantId + '"]'
       ];
       for (var i = 0; i < variantSelectors.length; i++) {
-        var el = root.querySelector(variantSelectors[i]);
-        if (el && el.closest) {
-          var row2 = el.closest(
+        var el2 = root.querySelector(variantSelectors[i]);
+        if (el2 && el2.closest) {
+          var row2 = el2.closest(
             ".cart-items__table-row, .cart-item, .cart__row, li, tr, .cart-line-item"
           );
           if (row2 && !isInsideDrawerOrMenu(row2)) {
@@ -185,12 +197,11 @@
       }
     }
 
-    // 3) Fallback: product URL / handle
+    // 3) URL/handle
     if (item.url || handle) {
       var selectorParts = [];
       if (item.url) selectorParts.push('a[href="' + item.url + '"]');
-      if (handle)
-        selectorParts.push('a[href*="/products/' + handle + '"]');
+      if (handle) selectorParts.push('a[href*="/products/' + handle + '"]');
 
       if (selectorParts.length) {
         var links = root.querySelectorAll(selectorParts.join(","));
@@ -212,19 +223,16 @@
 
   function findQtyInputInRow(row) {
     if (!row) return null;
-
     var selectors = [
       'input[name="updates[]"]',
       'input[name^="updates["]',
       'input[data-quantity-input]',
       'input[type="number"]'
     ];
-
     for (var i = 0; i < selectors.length; i++) {
       var input = row.querySelector(selectors[i]);
       if (input) return input;
     }
-
     return null;
   }
 
@@ -232,78 +240,73 @@
     if (!row) return null;
     return (
       row.querySelector(
-        ".cart-items__details, .cart-item__name, .cart__product-name, .product__description, .cart-item-title"
+        ".cart-items__details, .cart-item__details, .cart-item__name, .cart__product-name, .product__description, .cart-item-title"
       ) || row.firstElementChild
     );
   }
 
-  // ------------- main logic -------------
+  // ------------------ main -------------------
 
   function initSmartBundlesCart() {
     if (!/\/cart(\/|$|\?|#)/.test(window.location.pathname)) {
-      log("Not on cart page, aborting");
+      log("Not on cart page; abort");
       return;
     }
 
-    log("Initialising on cart page:", window.location.pathname);
-    injectCartStyles();
+    injectStyles();
+    log("Initialising on cart page");
 
     fetch("/cart.js", { credentials: "same-origin" })
       .then(function (r) {
-        if (!r.ok) {
-          throw new Error("Failed to load cart.js: " + r.status);
-        }
+        if (!r.ok) throw new Error("cart.js failed " + r.status);
         return r.json();
       })
       .then(function (cart) {
-        log("cart.js loaded", cart);
-        buildCartBundles(cart);
+        log("cart.js", cart);
+        buildBundles(cart);
       })
       .catch(function (err) {
-        console.error("[Smart Bundles Cart] Error initialising:", err);
+        console.error("[Smart Bundles Cart]", err);
       });
   }
 
-  function buildCartBundles(cart) {
-    if (!cart || !Array.isArray(cart.items)) {
-      log("No cart items, aborting");
-      return;
-    }
+  function buildBundles(cart) {
+    if (!cart || !Array.isArray(cart.items)) return;
 
     var bundles = {};
 
     cart.items.forEach(function (item) {
       if (!item || !item.properties) return;
-      var bundleKey = item.properties._bundle_key;
-      if (!bundleKey) return;
-
-      if (!bundles[bundleKey]) bundles[bundleKey] = [];
-      bundles[bundleKey].push({ item: item });
+      var key = item.properties._bundle_key;
+      if (!key) return;
+      if (!bundles[key]) bundles[key] = [];
+      bundles[key].push({ item: item });
     });
 
     var bundleKeys = Object.keys(bundles);
-    log("Found bundle groups:", bundleKeys);
+    log("Bundle groups:", bundleKeys);
     if (!bundleKeys.length) return;
 
     bundleKeys.forEach(function (bundleKey) {
       var group = bundles[bundleKey];
       if (!group || !group.length) return;
 
+      // attach DOM rows
       var rows = group
         .map(function (entry) {
           var row = findCartRowForItem(entry.item);
           return row
-            ? { row: row, item: entry.item }
+            ? { item: entry.item, row: row }
             : null;
         })
         .filter(Boolean);
 
       if (!rows.length) {
-        log("No DOM rows found for bundle", bundleKey);
+        log("No DOM rows for bundle", bundleKey);
         return;
       }
 
-      // Order by DOM position
+      // sort by DOM order
       rows.sort(function (a, b) {
         if (a.row === b.row) return 0;
         var pos = a.row.compareDocumentPosition(b.row);
@@ -313,15 +316,17 @@
       });
 
       var header = rows[0];
-      var children = rows.slice(1);
-      var headerItem = header.item;
+      var childrenReal = rows.slice(1);
 
-      // ----- make header row represent the bundle -----
+      // clone header BEFORE modifying it – this will be our "Item B" child row
+      var headerClone = header.row.cloneNode(true);
+
+      // -------- bundle meta / sums ----------
 
       var bundleTitle =
-        (headerItem.properties && headerItem.properties.Bundle) ||
-        headerItem.product_title ||
-        headerItem.title ||
+        (header.item.properties && header.item.properties.Bundle) ||
+        header.item.product_title ||
+        header.item.title ||
         "Bundle";
 
       var bundleTotalCents = rows.reduce(function (sum, r) {
@@ -337,71 +342,94 @@
         return sum + parsed;
       }, 0);
 
-      // Replace product title text with "Bundle: …"
+      // ---------- wrapper + DOM placement -----------
+
+      var parentNode = header.row.parentNode;
+      if (!parentNode) return;
+
+      var wrapper = document.createElement("div");
+      wrapper.className = "sb-cart-bundle sb-cart-bundle--open";
+
+      parentNode.insertBefore(wrapper, header.row);
+
+      // move header row inside wrapper
+      wrapper.appendChild(header.row);
+
+      // insert clone and real children after header
+      wrapper.appendChild(headerClone);
+      childrenReal.forEach(function (c) {
+        wrapper.appendChild(c.row);
+      });
+
+      // mark header + child classes
+      header.row.classList.add("sb-cart-bundle-header");
+      headerClone.classList.add("sb-cart-bundle-item");
+      childrenReal.forEach(function (c) {
+        c.row.classList.add("sb-cart-bundle-item");
+      });
+
+      // ---------- header row: make it the bundle summary ----------
+
+      // title -> "Bundle: X"
       var titleLink =
         header.row.querySelector(".cart-items__title, .cart-item__name, .cart__product-name");
       if (titleLink) {
         titleLink.textContent = "Bundle: " + bundleTitle;
       }
 
-      // Hide variant + properties list on header row only
-      var detailEls = header.row.querySelectorAll(
+      // hide variants + properties etc on header row
+      var metaEls = header.row.querySelectorAll(
         ".cart-items__variants, .cart-items__variant, .cart-items__properties, .product-option, .cart-item__meta, .cart__meta-text, .product__description-list"
       );
-      detailEls.forEach(function (el) {
+      metaEls.forEach(function (el) {
         el.style.display = "none";
       });
 
-      // Update header price cell to combined bundle total
-      var priceEl =
+      // hide Horizon-style tiny price block inside details
+      var headerDetails =
+        header.row.querySelector(".cart-items__details, .cart-item__details");
+      if (headerDetails) {
+        var innerPriceDiv = headerDetails.querySelector("div");
+        if (innerPriceDiv) {
+          innerPriceDiv.style.display = "none";
+        }
+      }
+
+      // overwrite price cell with bundle total
+      var priceCell =
         header.row.querySelector(
           ".cart-item__total-price, .cart-item__price, .cart__price, td.cart-items__price [data-cart-item-line-price], td.cart-items__price, [data-cart-item-line-price]"
         ) || header.row.querySelector(".cart__price-wrapper, .cart-price");
 
-      if (priceEl) {
-        // Horizon uses <text-component> inside td
-        if (priceEl.tagName && priceEl.tagName.toLowerCase() === "td") {
-          var textComp = priceEl.querySelector("text-component");
+      if (priceCell) {
+        if (priceCell.tagName && priceCell.tagName.toLowerCase() === "td") {
+          var textComp = priceCell.querySelector("text-component");
           if (textComp) {
             textComp.textContent = formatMoney(bundleTotalCents);
             textComp.setAttribute("value", formatMoney(bundleTotalCents));
           } else {
-            priceEl.textContent = formatMoney(bundleTotalCents);
+            priceCell.textContent = formatMoney(bundleTotalCents);
           }
         } else {
-          priceEl.textContent = formatMoney(bundleTotalCents);
+          priceCell.textContent = formatMoney(bundleTotalCents);
         }
       }
 
-      // ----- wrapper + accordion -----
-
-      var wrapper = document.createElement("div");
-      wrapper.className = "sb-cart-bundle";
-      var parentNode = header.row.parentNode;
-      if (!parentNode) return;
-
-      parentNode.insertBefore(wrapper, header.row);
-      rows.forEach(function (r) {
-        wrapper.appendChild(r.row);
-      });
-
-      header.row.classList.add("sb-cart-bundle-header");
-      children.forEach(function (r) {
-        r.row.classList.add("sb-cart-bundle-item");
-      });
+      // ---------- toggle (accordion) ----------
 
       var titleArea =
-        header.row.querySelector(".cart-items__details") ||
+        header.row.querySelector(".cart-items__details, .cart-item__details") ||
         findTitleArea(header.row);
+
+      var childCount = rows.length; // number of REAL items in bundle
 
       if (titleArea) {
         var toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "sb-cart-bundle-toggle";
-        var childCount = children.length;
-        toggle.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-expanded", "true");
         toggle.textContent =
-          "Show bundle items" + (childCount ? " (" + childCount + ")" : "");
+          "Hide bundle items" + (childCount ? " (" + childCount + ")" : "");
 
         toggle.addEventListener("click", function () {
           var expanded = toggle.getAttribute("aria-expanded") === "true";
@@ -412,47 +440,93 @@
             (next ? "Hide" : "Show") +
             " bundle items" +
             (childCount ? " (" + childCount + ")" : "");
+
+          var childRows =
+            wrapper.querySelectorAll(".sb-cart-bundle-item");
+          childRows.forEach(function (r) {
+            r.style.display = next ? "" : "none";
+          });
         });
 
         titleArea.appendChild(toggle);
       }
 
-      // ----- quantity sync -----
+      // ---------- shared child-row decoration (clone + real children) ----------
+
+      function decorateChildRow(row) {
+        if (!row) return;
+
+        // hide prices / totals / qty / remove
+        var prices = row.querySelector(".cart-item__prices, .cart-items__price");
+        if (prices) prices.style.display = "none";
+
+        var totals = row.querySelector(".cart-item__totals, [data-cart-item-line-price]");
+        if (totals) totals.style.display = "none";
+
+        var qtyCell = row.querySelector(".cart-item__quantity, .cart-items__quantity");
+        if (qtyCell) qtyCell.style.display = "none";
+
+        var removeCell = row.querySelector(".cart-item__remove");
+        if (removeCell) removeCell.style.display = "none";
+
+        // disable any quantity inputs so they don't submit
+        var qtyInput = findQtyInputInRow(row);
+        if (qtyInput) {
+          qtyInput.setAttribute("data-sb-disabled", "true");
+          qtyInput.disabled = true;
+          qtyInput.removeAttribute("name");
+        }
+      }
+
+      decorateChildRow(headerClone);
+      childrenReal.forEach(function (c) {
+        decorateChildRow(c.row);
+      });
+
+      // initially open – show all bundle items
+      var allChildRows = wrapper.querySelectorAll(".sb-cart-bundle-item");
+      allChildRows.forEach(function (r) {
+        r.style.display = "";
+      });
+
+      // ---------- quantity sync (header -> real bundle items) ----------
 
       var headerQtyInput = findQtyInputInRow(header.row);
       if (headerQtyInput) {
-        var headerQtyInitial = header.item.quantity || 1;
-        var multipliers = children.map(function (r) {
-          var childQtyInitial = r.item.quantity || 1;
+        var headerInitialQty = header.item.quantity || 1;
+
+        var multipliers = childrenReal.map(function (c) {
+          var childInitial = c.item.quantity || 1;
           var m =
-            headerQtyInitial > 0
-              ? childQtyInitial / headerQtyInitial
+            headerInitialQty > 0
+              ? childInitial / headerInitialQty
               : 1;
           return isFinite(m) && m > 0 ? m : 1;
         });
 
         headerQtyInput.addEventListener("change", function () {
-          var newHeaderQty = parseInt(headerQtyInput.value, 10);
-          if (isNaN(newHeaderQty) || newHeaderQty < 0) return;
+          var newQty = parseInt(headerQtyInput.value, 10);
+          if (isNaN(newQty) || newQty < 1) newQty = 1;
+          headerQtyInput.value = newQty;
 
-          children.forEach(function (r, idx) {
-            var input = findQtyInputInRow(r.row);
-            if (!input) return;
-            var m = multipliers[idx] || 1;
-            var target = Math.round(newHeaderQty * m);
-            if (target < 0) target = 0;
-            input.value = String(target);
+          childrenReal.forEach(function (c, idx) {
+            var rowInput = findQtyInputInRow(c.row);
+            if (!rowInput) return;
+            var mult = multipliers[idx] || 1;
+            var target = Math.round(newQty * mult);
+            if (target < 1) target = 1;
+            rowInput.value = String(target);
           });
 
-          log("Synced child quantities for bundle", bundleKey);
+          // submit the form (theme-cart form) so Shopify updates everything
+          var cartForm = header.row.closest('form[action^="/cart"]');
+          if (cartForm) {
+            cartForm.submit();
+          }
         });
       }
     });
   }
 
-  onReady(function () {
-    // Uncomment for verbose logging:
-     window.SB_CART_DEBUG = true;
-    initSmartBundlesCart();
-  });
+  onReady(initSmartBundlesCart);
 })();
