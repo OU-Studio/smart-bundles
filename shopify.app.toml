@@ -2,32 +2,36 @@
 
 client_id = "436e7772d6ff19c491c25bb4f2b34f14"
 name = "Smart Bundles"
-application_url = "https://example.com"
+application_url = "https://smart-bundles.ou.studio"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
-api_version = "2026-01"
-
-  [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
+api_version = "2025-10"
 
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products"
+scopes = "read_products,write_products,read_script_tags,write_script_tags,read_themes,write_themes"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://smart-bundles.ou.studio/auth/callback",
+  "https://smart-bundles.ou.studio/auth/shopify/callback"
+]
 
 [app_proxy]
-prefix = "apps"
-subpath = "smart-bundles"
 url = "/smart-bundles-proxy"
+subpath = "smart-bundles"
+prefix = "apps"
