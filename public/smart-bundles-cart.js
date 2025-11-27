@@ -1,5 +1,5 @@
 (function () {
-  // ------------- helpers -------------
+  // ------------- utilities -------------
 
   function onReady(fn) {
     if (document.readyState === "loading") {
@@ -100,7 +100,7 @@
     return "£" + value;
   }
 
-  // ----- find the main cart scope (so we don't touch header drawers etc) -----
+  // ----- cart scope helpers (avoid header drawers etc.) -----
 
   var CART_SCOPE = null;
 
@@ -136,7 +136,9 @@
     );
   }
 
-  // Find the DOM row for a given cart item (using multiple strategies)
+  // ----- DOM finders -----
+
+  // Find the DOM row for a given cart item
   function findCartRowForItem(item) {
     if (!item) return null;
 
@@ -207,7 +209,6 @@
     return null;
   }
 
-  // Find the quantity input inside a cart row
   function findQtyInputInRow(row) {
     if (!row) return null;
 
@@ -226,7 +227,6 @@
     return null;
   }
 
-  // Where to place the toggle in the header row
   function findTitleArea(row) {
     if (!row) return null;
     return (
@@ -350,11 +350,22 @@
         return sum + parsed;
       }, 0);
 
-      // 3) Update header row title
-      var nameContainer = findTitleArea(header.row);
-      if (nameContainer) {
-        nameContainer.textContent = "Bundle: " + bundleTitle;
+      // 3) Update header row title to "Bundle: {title}"
+      var titleEl =
+        header.row.querySelector(".cart-item__name, .cart__product-name") ||
+        findTitleArea(header.row);
+
+      if (titleEl) {
+        titleEl.textContent = "Bundle: " + bundleTitle;
       }
+
+      // 3b) Hide detailed meta (variant text, Bundle/Component lines) on header
+      var detailEls = header.row.querySelectorAll(
+        ".product-option, .cart-item__meta, .cart__meta-text, .product__description-list"
+      );
+      detailEls.forEach(function (el) {
+        el.style.display = "none";
+      });
 
       // 4) Update header row price to show bundle total
       var priceEl =
@@ -364,14 +375,6 @@
 
       if (priceEl) {
         priceEl.textContent = formatMoney(bundleTotalCents);
-      }
-
-      // 5) Hide meta (Bundle / Component) on the header row only
-      var metaEl = header.row.querySelector(
-        ".cart-item__meta, .cart__meta-text, .product__description-list"
-      );
-      if (metaEl) {
-        metaEl.style.display = "none";
       }
 
       // ----- wrapper + accordion -----
@@ -452,8 +455,8 @@
   }
 
   onReady(function () {
-    // Enable debug logs if needed:
-    window.SB_CART_DEBUG = true;
+    // Turn on to debug in console:
+    // window.SB_CART_DEBUG = true;
     initSmartBundlesCart();
   });
 })();
