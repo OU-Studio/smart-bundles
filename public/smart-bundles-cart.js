@@ -50,10 +50,11 @@
         display: block;
       }
 
-      /* Common cart row types */
-      .sb-cart-bundle .cart__row,
       .sb-cart-bundle .cart-item,
-      .sb-cart-bundle li {
+      .sb-cart-bundle .cart__row,
+      .sb-cart-bundle li,
+      .sb-cart-bundle tr,
+      .sb-cart-bundle .cart-line-item {
         border: none;
       }
 
@@ -83,34 +84,76 @@
     document.head.appendChild(style);
   }
 
-  // Find the DOM row for a given cart item key
-  function findCartRowByKey(itemKey) {
-    if (!itemKey) return null;
+  function log() {
+    if (!window.SB_CART_DEBUG) return;
+    var args = Array.prototype.slice.call(arguments);
+    args.unshift("[Smart Bundles Cart]");
+    console.log.apply(console, args);
+  }
 
-    // Most themes either have data-cart-item-key or a hidden input with name="id[]"
-    var hidden = document.querySelector(
-      'input[name="id[]"][value="' + itemKey + '"]'
-    );
-    var row = null;
+  // Find the DOM row for a given cart item (using multiple strategies)
+  function findCartRowForItem(item) {
+    if (!item) return null;
 
-    if (hidden && hidden.closest) {
-      row = hidden.closest(
-        ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
-      );
-    }
+    var key = item.key;
+    var variantId = item.variant_id;
+    var productId = item.product_id;
 
-    if (!row) {
+    // 1) data-cart-item-key (Dawn-style)
+    if (key) {
       var dataEl = document.querySelector(
-        '[data-cart-item-key="' + itemKey + '"]'
+        '[data-cart-item-key="' + key + '"]'
       );
       if (dataEl && dataEl.closest) {
-        row = dataEl.closest(
+        var row1 = dataEl.closest(
           ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
         );
+        if (row1) {
+          log("Found row via data-cart-item-key", key, row1);
+          return row1;
+        }
       }
     }
 
-    return row || null;
+    // 2) hidden input with variant id (very common)
+    if (variantId) {
+      var variantSelectors = [
+        'input[name="id[]"][value="' + variantId + '"]',
+        'input[name="id"][value="' + variantId + '"]',
+        '[data-variant-id="' + variantId + '"]',
+      ];
+      for (var i = 0; i < variantSelectors.length; i++) {
+        var el = document.querySelector(variantSelectors[i]);
+        if (el && el.closest) {
+          var row2 = el.closest(
+            ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+          );
+          if (row2) {
+            log("Found row via variant id", variantId, row2);
+            return row2;
+          }
+        }
+      }
+    }
+
+    // 3) Fall back to product URL match (very loose, last resort)
+    if (item.url) {
+      var links = document.querySelectorAll(
+        'a[href="' + item.url + '"], a[href*="' + item.handle + '"]'
+      );
+      for (var j = 0; j < links.length; j++) {
+        var row3 = links[j].closest(
+          ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+        );
+        if (row3) {
+          log("Found row via URL/handle", item.url || item.handle, row3);
+          return row3;
+        }
+      }
+    }
+
+    log("No row found for item", item);
+    return null;
   }
 
   // Find the quantity input inside a cart row
@@ -121,6 +164,7 @@
       'input[name="updates[]"]',
       'input[name^="updates["]',
       'input[data-quantity-input]',
+      'input[type="number"]',
     ];
 
     for (var i = 0; i < selectors.length; i++) {
@@ -144,11 +188,12 @@
   // ------------- main logic -------------
 
   function initSmartBundlesCart() {
-    // Only run on cart pages
     if (!/\/cart(\/|$|\?|#)/.test(window.location.pathname)) {
+      log("Not on cart page, aborting");
       return;
     }
 
+    log("Initialising on cart page:", window.location.pathname);
     injectCartStyles();
 
     fetch("/cart.js", { credentials: "same-origin" })
@@ -159,6 +204,7 @@
         return r.json();
       })
       .then(function (cart) {
+        log("cart.js loaded", cart);
         buildCartBundles(cart);
       })
       .catch(function (err) {
@@ -167,12 +213,15 @@
   }
 
   function buildCartBundles(cart) {
-    if (!cart || !Array.isArray(cart.items)) return;
+    if (!cart || !Array.isArray(cart.items)) {
+      log("No cart items, aborting");
+      return;
+    }
 
     // Group items by _bundle_key
-    var bundles = {}; // { key: [{ item, index }] }
+    var bundles = {}; // { key: [{ item }] }
 
-    cart.items.forEach(function (item, idx) {
+    cart.items.forEach(function (item) {
       if (!item || !item.properties) return;
       var bundleKey = item.properties._bundle_key;
       if (!bundleKey) return;
@@ -180,20 +229,22 @@
       if (!bundles[bundleKey]) {
         bundles[bundleKey] = [];
       }
-      bundles[bundleKey].push({
-        item: item,
-        index: idx,
-      });
+      bundles[bundleKey].push({ item: item });
     });
 
-    Object.keys(bundles).forEach(function (bundleKey) {
+    var bundleKeys = Object.keys(bundles);
+    log("Found bundle groups:", bundleKeys);
+
+    if (!bundleKeys.length) return;
+
+    bundleKeys.forEach(function (bundleKey) {
       var group = bundles[bundleKey];
       if (!group || group.length === 0) return;
 
       // Try to find DOM rows for each item
       var rows = group
         .map(function (entry) {
-          var row = findCartRowByKey(entry.item.key);
+          var row = findCartRowForItem(entry.item);
           return row
             ? {
                 row: row,
@@ -205,7 +256,10 @@
           return x !== null;
         });
 
-      if (!rows.length) return;
+      if (!rows.length) {
+        log("No DOM rows found for bundle", bundleKey);
+        return;
+      }
 
       // Sort rows by DOM position
       rows.sort(function (a, b) {
@@ -218,6 +272,17 @@
 
       var header = rows[0];
       var children = rows.slice(1);
+
+      log(
+        "Building bundle wrapper",
+        bundleKey,
+        "header:",
+        header.row,
+        "children:",
+        children.map(function (c) {
+          return c.row;
+        })
+      );
 
       // Create wrapper
       var wrapper = document.createElement("div");
@@ -265,7 +330,6 @@
       // Quantity sync: keep children in ratio to header quantity
       var headerQtyInput = findQtyInputInRow(header.row);
       if (headerQtyInput) {
-        // Compute initial multipliers: childQty = headerQty * multiplier
         var headerQtyInitial = header.item.quantity || 1;
         var multipliers = children.map(function (r) {
           var childQtyInitial = r.item.quantity || 1;
@@ -289,12 +353,15 @@
             input.value = String(target);
           });
 
-          // Let the theme handle the "Update cart" submit.
-          // Some themes auto-submit on change; others need a manual click.
+          log("Synced child quantities for bundle", bundleKey);
         });
       }
     });
   }
 
-  onReady(initSmartBundlesCart);
+  onReady(function () {
+    // enable logging if needed
+    // window.SB_CART_DEBUG = true;
+    initSmartBundlesCart();
+  });
 })();
