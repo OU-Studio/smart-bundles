@@ -110,7 +110,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return { bundle, computedOptions };
 };
 
-
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
@@ -204,6 +203,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   return { error: "Unknown action." };
 };
+
+
 
 function intentIsAddItem(actionData: any) {
   return actionData?.error && actionData?.intent === "addItem";
