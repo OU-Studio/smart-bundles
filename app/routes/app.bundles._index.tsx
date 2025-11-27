@@ -3,7 +3,7 @@ import type {
   ActionFunctionArgs,
   HeadersFunction,
 } from "react-router";
-import { Form, useLoaderData, useActionData, useNavigate } from "react-router";
+import { Form, useLoaderData, useActionData, useNavigate, Link } from "react-router";
 import { useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
@@ -121,13 +121,14 @@ export default function BundlesIndexPage() {
                 <s-stack direction="inline" gap="base">
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, marginBottom: 2 }}>
-                      <a
-                        href={`/app/bundles/${bundle.id}`}
+                      <Link
+                        to={`/app/bundles/${bundle.id}`}
                         style={{ textDecoration: "none", color: "inherit" }}
                       >
                         {bundle.title || "(Untitled bundle)"}
-                      </a>
+                      </Link>
                     </div>
+
                     <div style={{ fontSize: "12px", color: "#6d7175" }}>
                       {bundle.items.length} items ·{" "}
                       {bundle.handle || bundle.id}
