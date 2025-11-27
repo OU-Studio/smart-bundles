@@ -58,17 +58,20 @@
         border: none;
       }
 
-      .sb-cart-bundle-item .cart-item__name,
-      .sb-cart-bundle-item .cart__product-name {
-        padding-left: 1.25rem;
-        position: relative;
+      .sb-cart-bundle-item .cart-items__media {
+        visibility: hidden;
       }
 
-      .sb-cart-bundle-item .cart-item__name::before,
-      .sb-cart-bundle-item .cart__product-name::before {
+      .sb-cart-bundle-item .cart-items__title {
+        padding-left: 1.25rem;
+        position: relative;
+        display: inline-block;
+      }
+
+      .sb-cart-bundle-item .cart-items__title::before {
         content: "•";
         position: absolute;
-        left: 0;
+        left: -1rem;
       }
     `;
 
@@ -111,6 +114,7 @@
       'form[action="/cart"]',
       'form[action^="/cart?"]',
       'form[action*="/cart/update"]',
+      ".cart-items__wrapper",
       ".cart__items",
       ".cart-items"
     ];
@@ -138,7 +142,6 @@
 
   // ----- DOM finders -----
 
-  // Find the DOM row for a given cart item
   function findCartRowForItem(item) {
     if (!item) return null;
 
@@ -147,23 +150,21 @@
     var variantId = item.variant_id;
     var handle = item.handle;
 
-    // 1) data-cart-item-key (Dawn-style)
+    // 1) data-cart-item-key (Dawn-style and many others)
     if (key) {
-      var dataEl = root.querySelector(
-        '[data-cart-item-key="' + key + '"]'
-      );
+      var dataEl = root.querySelector('[data-key="' + key + '"], [data-cart-item-key="' + key + '"]');
       if (dataEl && dataEl.closest) {
         var row1 = dataEl.closest(
-          ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+          ".cart-items__table-row, .cart-item, .cart__row, li, tr, .cart-line-item"
         );
         if (row1 && !isInsideDrawerOrMenu(row1)) {
-          log("Found row via data-cart-item-key", key, row1);
+          log("Found row via data-key / data-cart-item-key", key, row1);
           return row1;
         }
       }
     }
 
-    // 2) hidden input with variant id (very common)
+    // 2) hidden input with variant id
     if (variantId) {
       var variantSelectors = [
         'input[name="id[]"][value="' + variantId + '"]',
@@ -174,7 +175,7 @@
         var el = root.querySelector(variantSelectors[i]);
         if (el && el.closest) {
           var row2 = el.closest(
-            ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+            ".cart-items__table-row, .cart-item, .cart__row, li, tr, .cart-line-item"
           );
           if (row2 && !isInsideDrawerOrMenu(row2)) {
             log("Found row via variant id", variantId, row2);
@@ -184,7 +185,7 @@
       }
     }
 
-    // 3) Fall back to a link with product URL / handle WITHIN cart scope
+    // 3) Fallback: product URL / handle
     if (item.url || handle) {
       var selectorParts = [];
       if (item.url) selectorParts.push('a[href="' + item.url + '"]');
@@ -195,7 +196,7 @@
         var links = root.querySelectorAll(selectorParts.join(","));
         for (var j = 0; j < links.length; j++) {
           var row3 = links[j].closest(
-            ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+            ".cart-items__table-row, .cart-item, .cart__row, li, tr, .cart-line-item"
           );
           if (row3 && !isInsideDrawerOrMenu(row3)) {
             log("Found row via URL/handle", item.url || handle, row3);
@@ -231,7 +232,7 @@
     if (!row) return null;
     return (
       row.querySelector(
-        ".cart-item__name, .cart__product-name, .product__description, .cart-item-title"
+        ".cart-items__details, .cart-item__name, .cart__product-name, .product__description, .cart-item-title"
       ) || row.firstElementChild
     );
   }
@@ -269,50 +270,40 @@
       return;
     }
 
-    // Group items by _bundle_key
-    var bundles = {}; // { key: [{ item }] }
+    var bundles = {};
 
     cart.items.forEach(function (item) {
       if (!item || !item.properties) return;
       var bundleKey = item.properties._bundle_key;
       if (!bundleKey) return;
 
-      if (!bundles[bundleKey]) {
-        bundles[bundleKey] = [];
-      }
+      if (!bundles[bundleKey]) bundles[bundleKey] = [];
       bundles[bundleKey].push({ item: item });
     });
 
     var bundleKeys = Object.keys(bundles);
     log("Found bundle groups:", bundleKeys);
-
     if (!bundleKeys.length) return;
 
     bundleKeys.forEach(function (bundleKey) {
       var group = bundles[bundleKey];
-      if (!group || group.length === 0) return;
+      if (!group || !group.length) return;
 
-      // Try to find DOM rows for each item
       var rows = group
         .map(function (entry) {
           var row = findCartRowForItem(entry.item);
           return row
-            ? {
-                row: row,
-                item: entry.item
-              }
+            ? { row: row, item: entry.item }
             : null;
         })
-        .filter(function (x) {
-          return x !== null;
-        });
+        .filter(Boolean);
 
       if (!rows.length) {
         log("No DOM rows found for bundle", bundleKey);
         return;
       }
 
-      // Sort rows by DOM position
+      // Order by DOM position
       rows.sort(function (a, b) {
         if (a.row === b.row) return 0;
         var pos = a.row.compareDocumentPosition(b.row);
@@ -323,19 +314,16 @@
 
       var header = rows[0];
       var children = rows.slice(1);
-
-      // ----- make header row represent the whole bundle -----
-
       var headerItem = header.item;
 
-      // 1) Bundle title (from line item properties if available)
+      // ----- make header row represent the bundle -----
+
       var bundleTitle =
         (headerItem.properties && headerItem.properties.Bundle) ||
         headerItem.product_title ||
         headerItem.title ||
         "Bundle";
 
-      // 2) Bundle total = sum of all line prices in this group
       var bundleTotalCents = rows.reduce(function (sum, r) {
         var it = r.item;
         var cents =
@@ -344,37 +332,45 @@
             : it.line_price != null
             ? it.line_price
             : 0;
-
         var parsed = parseInt(cents, 10);
         if (isNaN(parsed)) parsed = 0;
         return sum + parsed;
       }, 0);
 
-      // 3) Update header row title to "Bundle: {title}"
-      var titleEl =
-        header.row.querySelector(".cart-item__name, .cart__product-name") ||
-        findTitleArea(header.row);
-
-      if (titleEl) {
-        titleEl.textContent = "Bundle: " + bundleTitle;
+      // Replace product title text with "Bundle: …"
+      var titleLink =
+        header.row.querySelector(".cart-items__title, .cart-item__name, .cart__product-name");
+      if (titleLink) {
+        titleLink.textContent = "Bundle: " + bundleTitle;
       }
 
-      // 3b) Hide detailed meta (variant text, Bundle/Component lines) on header
+      // Hide variant + properties list on header row only
       var detailEls = header.row.querySelectorAll(
-        ".product-option, .cart-item__meta, .cart__meta-text, .product__description-list"
+        ".cart-items__variants, .cart-items__variant, .cart-items__properties, .product-option, .cart-item__meta, .cart__meta-text, .product__description-list"
       );
       detailEls.forEach(function (el) {
         el.style.display = "none";
       });
 
-      // 4) Update header row price to show bundle total
+      // Update header price cell to combined bundle total
       var priceEl =
         header.row.querySelector(
-          ".cart-item__total-price, .cart-item__price, .cart__price, [data-cart-item-line-price]"
+          ".cart-item__total-price, .cart-item__price, .cart__price, td.cart-items__price [data-cart-item-line-price], td.cart-items__price, [data-cart-item-line-price]"
         ) || header.row.querySelector(".cart__price-wrapper, .cart-price");
 
       if (priceEl) {
-        priceEl.textContent = formatMoney(bundleTotalCents);
+        // Horizon uses <text-component> inside td
+        if (priceEl.tagName && priceEl.tagName.toLowerCase() === "td") {
+          var textComp = priceEl.querySelector("text-component");
+          if (textComp) {
+            textComp.textContent = formatMoney(bundleTotalCents);
+            textComp.setAttribute("value", formatMoney(bundleTotalCents));
+          } else {
+            priceEl.textContent = formatMoney(bundleTotalCents);
+          }
+        } else {
+          priceEl.textContent = formatMoney(bundleTotalCents);
+        }
       }
 
       // ----- wrapper + accordion -----
@@ -382,11 +378,9 @@
       var wrapper = document.createElement("div");
       wrapper.className = "sb-cart-bundle";
       var parentNode = header.row.parentNode;
-
       if (!parentNode) return;
-      parentNode.insertBefore(wrapper, header.row);
 
-      // Move all rows into wrapper
+      parentNode.insertBefore(wrapper, header.row);
       rows.forEach(function (r) {
         wrapper.appendChild(r.row);
       });
@@ -396,8 +390,10 @@
         r.row.classList.add("sb-cart-bundle-item");
       });
 
-      // Add accordion toggle
-      var titleArea = findTitleArea(header.row);
+      var titleArea =
+        header.row.querySelector(".cart-items__details") ||
+        findTitleArea(header.row);
+
       if (titleArea) {
         var toggle = document.createElement("button");
         toggle.type = "button";
@@ -421,7 +417,8 @@
         titleArea.appendChild(toggle);
       }
 
-      // Quantity sync: keep children in ratio to header quantity
+      // ----- quantity sync -----
+
       var headerQtyInput = findQtyInputInRow(header.row);
       if (headerQtyInput) {
         var headerQtyInitial = header.item.quantity || 1;
@@ -448,15 +445,14 @@
           });
 
           log("Synced child quantities for bundle", bundleKey);
-          // Theme handles the actual form submit / cart update.
         });
       }
     });
   }
 
   onReady(function () {
-    // Turn on to debug in console:
-    // window.SB_CART_DEBUG = true;
+    // Uncomment for verbose logging:
+     window.SB_CART_DEBUG = true;
     initSmartBundlesCart();
   });
 })();
