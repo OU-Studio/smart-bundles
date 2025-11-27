@@ -100,24 +100,61 @@
     return "£" + value;
   }
 
+  // ----- find the main cart scope (so we don't touch header drawers etc) -----
+
+  var CART_SCOPE = null;
+
+  function getCartScope() {
+    if (CART_SCOPE) return CART_SCOPE;
+
+    var selectors = [
+      'form[action="/cart"]',
+      'form[action^="/cart?"]',
+      'form[action*="/cart/update"]',
+      ".cart__items",
+      ".cart-items"
+    ];
+
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (el) {
+        CART_SCOPE = el;
+        log("Using cart scope:", selectors[i], el);
+        return CART_SCOPE;
+      }
+    }
+
+    CART_SCOPE = document;
+    log("Falling back to document as cart scope");
+    return CART_SCOPE;
+  }
+
+  function isInsideDrawerOrMenu(el) {
+    if (!el || !el.closest) return false;
+    return !!el.closest(
+      ".menu-drawer, .menu-drawer__inner-container, .drawer, [data-predictive-search]"
+    );
+  }
+
   // Find the DOM row for a given cart item (using multiple strategies)
   function findCartRowForItem(item) {
     if (!item) return null;
 
+    var root = getCartScope();
     var key = item.key;
     var variantId = item.variant_id;
     var handle = item.handle;
 
     // 1) data-cart-item-key (Dawn-style)
     if (key) {
-      var dataEl = document.querySelector(
+      var dataEl = root.querySelector(
         '[data-cart-item-key="' + key + '"]'
       );
       if (dataEl && dataEl.closest) {
         var row1 = dataEl.closest(
           ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
         );
-        if (row1) {
+        if (row1 && !isInsideDrawerOrMenu(row1)) {
           log("Found row via data-cart-item-key", key, row1);
           return row1;
         }
@@ -132,12 +169,12 @@
         '[data-variant-id="' + variantId + '"]'
       ];
       for (var i = 0; i < variantSelectors.length; i++) {
-        var el = document.querySelector(variantSelectors[i]);
+        var el = root.querySelector(variantSelectors[i]);
         if (el && el.closest) {
           var row2 = el.closest(
             ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
           );
-          if (row2) {
+          if (row2 && !isInsideDrawerOrMenu(row2)) {
             log("Found row via variant id", variantId, row2);
             return row2;
           }
@@ -145,7 +182,7 @@
       }
     }
 
-    // 3) Fall back to a link with product URL / handle
+    // 3) Fall back to a link with product URL / handle WITHIN cart scope
     if (item.url || handle) {
       var selectorParts = [];
       if (item.url) selectorParts.push('a[href="' + item.url + '"]');
@@ -153,12 +190,12 @@
         selectorParts.push('a[href*="/products/' + handle + '"]');
 
       if (selectorParts.length) {
-        var links = document.querySelectorAll(selectorParts.join(","));
+        var links = root.querySelectorAll(selectorParts.join(","));
         for (var j = 0; j < links.length; j++) {
           var row3 = links[j].closest(
             ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
           );
-          if (row3) {
+          if (row3 && !isInsideDrawerOrMenu(row3)) {
             log("Found row via URL/handle", item.url || handle, row3);
             return row3;
           }
@@ -415,7 +452,7 @@
   }
 
   onReady(function () {
-    // Enable console debug logs by uncommenting:
+    // Enable debug logs if needed:
     window.SB_CART_DEBUG = true;
     initSmartBundlesCart();
   });
