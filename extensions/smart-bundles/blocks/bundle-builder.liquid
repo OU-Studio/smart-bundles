@@ -490,62 +490,80 @@
       updateBundlePrices(block, outputEl);
     }
 
-        function updateBundlePrices(block, outputEl) {
-      var state = block._sbState || {};
-      var items = state.items || [];
-      var sharedSelections = getSelectedSharedOptions(outputEl);
+       function updateBundlePrices(block, outputEl) {
+  var state = block._sbState || {};
+  var items = state.items || [];
+  var sharedSelections = getSelectedSharedOptions(outputEl);
 
-      var bundleSubtotalCents = 0;
+  var bundleSubtotalCents = 0;
 
-      items.forEach(function (item) {
-        var perItemSelections = getSelectedItemOptions(outputEl, item.id);
-        var variantId = findVariantIdForSelections(
-          item.product,
-          sharedSelections,
-          perItemSelections
-        );
+  items.forEach(function (item) {
+    var perItemSelections = getSelectedItemOptions(outputEl, item.id);
 
-        var itemPriceEl = outputEl.querySelector(
-          '.sb-item-price[data-item-price-for="' + item.id + '"]'
-        );
+    var variantId = findVariantIdForSelections(
+      item.product,
+      sharedSelections,
+      perItemSelections
+    );
 
-        var variant = null;
-if (variantId && item.product && Array.isArray(item.product.variants)) {
-  variant = item.product.variants.find(function (v) {
-    return String(v.id) === String(variantId);
+    var itemPriceEl = outputEl.querySelector(
+      '.sb-item-price[data-item-price-for="' + item.id + '"]'
+    );
+
+    var variant = null;
+    if (variantId && item.product && Array.isArray(item.product.variants)) {
+      variant = item.product.variants.find(function (v) {
+        return String(v.id) === String(variantId);
+      });
+    }
+
+    var quantityBase = item.quantity || 1;
+
+    // --- NORMALISE PRICE TO CENTS ---------------------------------
+    var priceCents = 0;
+    if (variant && variant.price != null) {
+      var raw = variant.price;
+
+      if (typeof raw === "number") {
+        // Often already in cents (e.g. 600 for £6)
+        priceCents = raw;
+      } else if (typeof raw === "string") {
+        // If it looks like "6" or "6.00", treat as major units and convert
+        if (raw.indexOf(".") >= 0) {
+          var num = parseFloat(raw);
+          if (!isNaN(num)) priceCents = Math.round(num * 100);
+        } else {
+          // Could be "600" (cents) or "6" (major) – safest is treat as integer cents
+          var parsed = parseInt(raw, 10);
+          if (!isNaN(parsed)) priceCents = parsed;
+        }
+      }
+    }
+    // --------------------------------------------------------------
+
+    var lineSubtotalCents = priceCents * quantityBase;
+    bundleSubtotalCents += lineSubtotalCents;
+
+    if (itemPriceEl) {
+      if (priceCents > 0) {
+        itemPriceEl.textContent =
+          formatMoney(priceCents) +
+          (quantityBase > 1 ? " × " + quantityBase : "");
+      } else {
+        itemPriceEl.textContent = "—";
+      }
+    }
   });
-}
 
-var quantityBase = item.quantity || 1;
-
-// Shopify /products/{handle}.js returns price in cents (integer)
-var priceCents = 0;
-if (variant && variant.price != null) {
-  priceCents = parseInt(variant.price, 10);
-  if (isNaN(priceCents)) priceCents = 0;
-}
-
-var lineSubtotalCents = priceCents * quantityBase;
-bundleSubtotalCents += lineSubtotalCents;
-
-if (itemPriceEl) {
-  if (variant) {
-    itemPriceEl.textContent =
-      formatMoney(priceCents) +
-      (quantityBase > 1 ? " × " + quantityBase : "");
-  } else {
-    itemPriceEl.textContent = "—";
+  // Now apply bundle quantity multiplier once, at the end
+  var bundleQty = getBundleQuantity(outputEl);
+  var totalCents = bundleSubtotalCents * bundleQty;
+  var totalEl = outputEl.querySelector(".sb-bundle-total-price");
+  if (totalEl) {
+    totalEl.textContent = formatMoney(totalCents);
   }
 }
 
-
-      var bundleQty = getBundleQuantity(outputEl);
-      var totalCents = bundleSubtotalCents * bundleQty;
-      var totalEl = outputEl.querySelector(".sb-bundle-total-price");
-      if (totalEl) {
-        totalEl.textContent = formatMoney(totalCents);
-      }
-    }
 
 
 
