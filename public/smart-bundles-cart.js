@@ -318,7 +318,7 @@
       var header = rows[0];
       var childrenReal = rows.slice(1);
 
-      // clone header BEFORE modifying it – this will be our "Item B" child row
+      // clone header BEFORE modifying it – this will be our first child row
       var headerClone = header.row.cloneNode(true);
 
       // -------- bundle meta / sums ----------
@@ -341,6 +341,13 @@
         if (isNaN(parsed)) parsed = 0;
         return sum + parsed;
       }, 0);
+
+      var headerInitialQty = header.item.quantity || 1;
+      if (headerInitialQty < 1) headerInitialQty = 1;
+
+      var bundleUnitPriceCents = headerInitialQty
+        ? Math.round(bundleTotalCents / headerInitialQty)
+        : bundleTotalCents;
 
       // ---------- wrapper + DOM placement -----------
 
@@ -385,17 +392,20 @@
         el.style.display = "none";
       });
 
-      // hide Horizon-style tiny price block inside details
+      // Horizon-style per-line price that sits under title: show single-bundle price
       var headerDetails =
         header.row.querySelector(".cart-items__details, .cart-item__details");
       if (headerDetails) {
-        var innerPriceDiv = headerDetails.querySelector("div");
-        if (innerPriceDiv) {
-          innerPriceDiv.style.display = "none";
+        var priceBlock = headerDetails.querySelector("div");
+        if (priceBlock) {
+          var span = priceBlock.querySelector("span:not(.visually-hidden)");
+          if (span) {
+            span.textContent = formatMoney(bundleUnitPriceCents);
+          }
         }
       }
 
-      // overwrite price cell with bundle total
+      // overwrite total cell with bundle total (price * qty)
       var priceCell =
         header.row.querySelector(
           ".cart-item__total-price, .cart-item__price, .cart__price, td.cart-items__price [data-cart-item-line-price], td.cart-items__price, [data-cart-item-line-price]"
@@ -421,7 +431,7 @@
         header.row.querySelector(".cart-items__details, .cart-item__details") ||
         findTitleArea(header.row);
 
-      var childCount = rows.length; // number of REAL items in bundle
+      var childCount = rows.length; // REAL items count
 
       if (titleArea) {
         var toggle = document.createElement("button");
@@ -493,8 +503,6 @@
 
       var headerQtyInput = findQtyInputInRow(header.row);
       if (headerQtyInput) {
-        var headerInitialQty = header.item.quantity || 1;
-
         var multipliers = childrenReal.map(function (c) {
           var childInitial = c.item.quantity || 1;
           var m =
@@ -509,6 +517,7 @@
           if (isNaN(newQty) || newQty < 1) newQty = 1;
           headerQtyInput.value = newQty;
 
+          // update child row inputs
           childrenReal.forEach(function (c, idx) {
             var rowInput = findQtyInputInRow(c.row);
             if (!rowInput) return;
@@ -523,6 +532,33 @@
           if (cartForm) {
             cartForm.submit();
           }
+        });
+      }
+
+      // ---------- remove button = remove whole bundle ----------
+
+      var allRealRows = [header].concat(childrenReal);
+      var cartFormForRemove = header.row.closest('form[action^="/cart"]');
+
+      if (cartFormForRemove) {
+        var removeButtons = header.row.querySelectorAll(
+          ".cart-items__remove button, .cart-item__remove button, .cart-remove, a[href*='cart/change']"
+        );
+
+        removeButtons.forEach(function (btn) {
+          btn.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            allRealRows.forEach(function (entry) {
+              var input = findQtyInputInRow(entry.row);
+              if (input) {
+                input.value = "0";
+              }
+            });
+
+            cartFormForRemove.submit();
+          });
         });
       }
     });
