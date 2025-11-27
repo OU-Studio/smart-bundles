@@ -275,21 +275,26 @@
         });
       }
 
-      var productPromises = resolvable.map(function (item) {
+            var productPromises = resolvable.map(function (item) {
         var handle = productIdToHandle(item.productId);
         return fetchProductJson(handle)
           .then(function (productJson) {
+            sbLog("Product JSON for handle", handle, {
+              rawPriceExample:
+                productJson &&
+                productJson.variants &&
+                productJson.variants[0] &&
+                productJson.variants[0].price,
+              variant0: productJson && productJson.variants && productJson.variants[0],
+            });
             return { item: item, handle: handle, product: productJson };
           })
           .catch(function (err) {
-            console.error(
-              "[Smart Bundles] Error fetching product JSON for",
-              handle,
-              err
-            );
+            console.error("[Smart Bundles] Error fetching product JSON for", handle, err);
             return null;
           });
       });
+
 
       return Promise.all(productPromises).then(function (results) {
         var itemsWithProducts = [];
@@ -523,12 +528,17 @@
 
     // ---------- PRICE + TOTALS ----------
 
-    function updateBundlePrices(block, outputEl) {
+        function updateBundlePrices(block, outputEl) {
       var state = block._sbState || {};
       var items = state.items || [];
       var sharedSelections = getSelectedSharedOptions(outputEl);
 
       var bundleSubtotalCents = 0;
+
+      sbLog("updateBundlePrices: starting", {
+        itemCount: items.length,
+        sharedSelections: sharedSelections,
+      });
 
       items.forEach(function (item) {
         var perItemSelections = getSelectedItemOptions(outputEl, item.id);
@@ -552,15 +562,60 @@
 
         var quantityBase = item.quantity || 1;
 
-        // /products/{handle}.js -> variant.price is in cents (integer or numeric string)
+        // ---- RAW PRICE DEBUG ----
+        var rawPrice = variant ? variant.price : null;
+        sbLog("Item price computation", {
+          itemId: item.id,
+          productId: item.productId,
+          variantId: variantId,
+          rawPrice: rawPrice,
+          rawPriceType: typeof rawPrice,
+          quantityBase: quantityBase,
+        });
+
+        // /products/{handle}.js -> variant.price is usually cents (integer or numeric string)
         var priceCents = 0;
-        if (variant && variant.price != null) {
-          priceCents = parseInt(variant.price, 10);
-          if (isNaN(priceCents)) priceCents = 0;
+        if (rawPrice != null) {
+          // Normalise to integer
+          if (typeof rawPrice === "number") {
+            priceCents = rawPrice;
+          } else if (typeof rawPrice === "string") {
+            // Log the first few chars so we can eyeball it
+            sbLog("Raw price string", rawPrice, "length", rawPrice.length);
+
+            // If it looks like "6.00" treat as major units and convert
+            if (rawPrice.indexOf(".") >= 0) {
+              var asFloat = parseFloat(rawPrice);
+              if (!isNaN(asFloat)) {
+                priceCents = Math.round(asFloat * 100);
+              }
+            } else {
+              // Treat as integer cents by default
+              var asInt = parseInt(rawPrice, 10);
+              if (!isNaN(asInt)) {
+                priceCents = asInt;
+              }
+            }
+          }
         }
+
+        if (isNaN(priceCents) || !isFinite(priceCents)) {
+          priceCents = 0;
+        }
+
+        sbLog("Normalised price", {
+          itemId: item.id,
+          priceCents: priceCents,
+        });
 
         var lineSubtotalCents = priceCents * quantityBase;
         bundleSubtotalCents += lineSubtotalCents;
+
+        sbLog("Line subtotal", {
+          itemId: item.id,
+          lineSubtotalCents: lineSubtotalCents,
+          runningBundleSubtotalCents: bundleSubtotalCents,
+        });
 
         if (itemPriceEl) {
           if (priceCents > 0) {
@@ -576,10 +631,19 @@
       var bundleQty = getBundleQuantity(outputEl);
       var totalCents = bundleSubtotalCents * bundleQty;
       var totalEl = outputEl.querySelector(".sb-bundle-total-price");
+
+      sbLog("Bundle totals", {
+        bundleSubtotalCents: bundleSubtotalCents,
+        bundleQty: bundleQty,
+        totalCents: totalCents,
+        formattedTotal: formatMoney(totalCents),
+      });
+
       if (totalEl) {
         totalEl.textContent = formatMoney(totalCents);
       }
     }
+
 
     function getSelectedSharedOptions(rootEl) {
       var map = {};
