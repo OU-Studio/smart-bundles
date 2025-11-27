@@ -7,7 +7,8 @@
     var cartForm = document.querySelector('form[action*="/cart"]');
     if (!cartForm) return;
 
-    var shopCurrency = document.documentElement.getAttribute("data-shop-currency") || "GBP";
+    var shopCurrency =
+      document.documentElement.getAttribute("data-shop-currency") || "GBP";
 
     function formatMoney(cents) {
       var n = (cents || 0) / 100;
@@ -31,18 +32,18 @@
         if (!items.length) return;
 
         // Find all quantity inputs in the cart form and map to rows in DOM order
-        var qtyInputs = Array.from(
+        var qtyInputs = Array.prototype.slice.call(
           cartForm.querySelectorAll('input[type="number"][name*="updates"]')
         );
         if (!qtyInputs.length) return;
 
         var rows = qtyInputs.map(function (input) {
-          var row =
+          return (
             input.closest("tr") ||
             input.closest(".cart-item") ||
             input.closest("li") ||
-            input.closest("div");
-          return row;
+            input.closest("div")
+          );
         });
 
         // Map index -> { item, row }, then group by _bundle_key
@@ -71,9 +72,10 @@
           var label = document.createElement("p");
           label.className = "sb-cart-bundle-label";
           label.textContent = "Part of " + bundleName;
+
           var titleLink =
-            detailsCell.querySelector("a") ||
-            detailsCell.firstChild;
+            detailsCell.querySelector("a") || detailsCell.firstChild;
+
           if (titleLink && titleLink.parentNode === detailsCell) {
             detailsCell.insertBefore(label, titleLink);
           } else {
@@ -100,10 +102,8 @@
 
           // Sort by DOM order just to be safe
           group.sort(function (a, b) {
-            return (
-              a.row.compareDocumentPosition(b.row) &
+            return a.row.compareDocumentPosition(b.row) &
               Node.DOCUMENT_POSITION_FOLLOWING
-            )
               ? -1
               : 1;
           });
@@ -129,7 +129,7 @@
           toggleBtn.className = "sb-cart-bundle-toggle";
           toggleBtn.setAttribute("aria-expanded", "false");
           toggleBtn.textContent = "Show bundle items";
-          label.after(toggleBtn);
+          label.parentNode.insertBefore(toggleBtn, label.nextSibling);
 
           // ----- Hide child rows and some UI -----
           children.forEach(function (child) {
@@ -138,7 +138,6 @@
 
             row.classList.add("sb-cart-bundle-child");
 
-            // hide price / totals / qty / remove if we can find them
             var priceCell =
               row.querySelector(".cart-item__prices") ||
               row.querySelector(".cart__price");
@@ -156,7 +155,10 @@
 
             var removeCell =
               row.querySelector(".cart-item__remove") ||
-              row.querySelector('[href*="change?line"]')?.closest("td");
+              (function () {
+                var link = row.querySelector('[href*="change?line"]');
+                return link ? link.closest("td") : null;
+              })();
             if (removeCell) removeCell.style.display = "none";
 
             row.style.display = "none"; // collapsed by default
@@ -165,20 +167,19 @@
           // ----- Compute bundle unit price from cart JSON -----
           var bundleUnitPrice = 0;
           group.forEach(function (entry) {
-            bundleUnitPrice += entry.item.price; // price is in cents
+            bundleUnitPrice += entry.item.price; // cents
           });
 
           var parentQty = parent.item.quantity || 1;
           parentInput.value = parentQty;
           var bundleTotal = bundleUnitPrice * parentQty;
 
-          // Override price + total display on parent row (best effort)
+          // Override price + total display on parent row
           var parentPriceEl = findPriceElement(parentRow);
           if (parentPriceEl) {
             parentPriceEl.textContent = formatMoney(bundleUnitPrice);
           }
 
-          // If theme has a separate "total" cell, try updating it too
           var parentTotalsEl =
             parentRow.querySelector("[data-cart-item-line-price]") ||
             parentRow.querySelector(".cart-item__totals .price") ||
@@ -190,9 +191,12 @@
           // ----- Remove bundle (sets all qty to 0 and submits) -----
           var removeCellParent =
             parentRow.querySelector(".cart-item__remove") ||
-            parentRow.querySelector('[href*="change?line"]')?.closest("td");
+            (function () {
+              var link = parentRow.querySelector('[href*="change?line"]');
+              return link ? link.closest("td") : null;
+            })();
+
           if (removeCellParent) {
-            // Hide any existing remove link/icon to avoid confusion
             var existingLink = removeCellParent.querySelector("a");
             if (existingLink) existingLink.style.display = "none";
 
@@ -223,7 +227,6 @@
               }
             });
 
-            // update bundle total display
             var newTotal = bundleUnitPrice * newQty;
             if (parentTotalsEl) {
               parentTotalsEl.textContent = formatMoney(newTotal);

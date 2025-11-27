@@ -36,6 +36,7 @@ const shopify = shopifyApp({
         }
 
         const scriptSrc = `${APP_URL}/smart-bundles-cart.js`;
+        
 
         // 1) Check if script tag already exists for this src
         const existingRes = await admin.graphql(
