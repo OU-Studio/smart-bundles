@@ -8,6 +8,16 @@
 
 <script>
   (function () {
+        // ---- DEBUG TOGGLE ----
+    // Set this to false to silence all logs
+    var SB_DEBUG = true;
+    function sbLog() {
+      if (!SB_DEBUG) return;
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift("[Smart Bundles][debug]");
+      console.log.apply(console, args);
+    }
+
     function initSmartBundleBlocks() {
       var blocks = document.querySelectorAll(".smart-bundle-block");
       blocks.forEach(function (block) {
