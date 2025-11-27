@@ -1,5 +1,5 @@
 (function () {
-  const DEBUG = false;
+  const DEBUG = true;
   const log = (...a) => DEBUG && console.log('[SmartBundles]', ...a);
 
   // Row = <tr class="cart-items__table-row ..." data-line-key="..." data-bundle-key="...">
