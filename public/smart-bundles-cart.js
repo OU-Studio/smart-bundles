@@ -1,5 +1,5 @@
 (function () {
-  // ------------- small helpers -------------
+  // ------------- helpers -------------
 
   function onReady(fn) {
     if (document.readyState === "loading") {
@@ -58,12 +58,6 @@
         border: none;
       }
 
-      .sb-cart-bundle-header .cart-item__name::before,
-      .sb-cart-bundle-header .cart__product-name::before {
-        content: "Bundle: ";
-        font-weight: 600;
-      }
-
       .sb-cart-bundle-item .cart-item__name,
       .sb-cart-bundle-item .cart__product-name {
         padding-left: 1.25rem;
@@ -91,13 +85,28 @@
     console.log.apply(console, args);
   }
 
+  function formatMoney(cents) {
+    var intCents = parseInt(cents, 10);
+    if (isNaN(intCents)) intCents = 0;
+
+    if (window.Shopify && typeof Shopify.formatMoney === "function") {
+      return Shopify.formatMoney(
+        intCents,
+        (window.theme && theme.moneyFormat) || "{{amount}}"
+      );
+    }
+
+    var value = (intCents / 100).toFixed(2);
+    return "£" + value;
+  }
+
   // Find the DOM row for a given cart item (using multiple strategies)
   function findCartRowForItem(item) {
     if (!item) return null;
 
     var key = item.key;
     var variantId = item.variant_id;
-    var productId = item.product_id;
+    var handle = item.handle;
 
     // 1) data-cart-item-key (Dawn-style)
     if (key) {
@@ -120,7 +129,7 @@
       var variantSelectors = [
         'input[name="id[]"][value="' + variantId + '"]',
         'input[name="id"][value="' + variantId + '"]',
-        '[data-variant-id="' + variantId + '"]',
+        '[data-variant-id="' + variantId + '"]'
       ];
       for (var i = 0; i < variantSelectors.length; i++) {
         var el = document.querySelector(variantSelectors[i]);
@@ -136,18 +145,23 @@
       }
     }
 
-    // 3) Fall back to product URL match (very loose, last resort)
-    if (item.url) {
-      var links = document.querySelectorAll(
-        'a[href="' + item.url + '"], a[href*="' + item.handle + '"]'
-      );
-      for (var j = 0; j < links.length; j++) {
-        var row3 = links[j].closest(
-          ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
-        );
-        if (row3) {
-          log("Found row via URL/handle", item.url || item.handle, row3);
-          return row3;
+    // 3) Fall back to a link with product URL / handle
+    if (item.url || handle) {
+      var selectorParts = [];
+      if (item.url) selectorParts.push('a[href="' + item.url + '"]');
+      if (handle)
+        selectorParts.push('a[href*="/products/' + handle + '"]');
+
+      if (selectorParts.length) {
+        var links = document.querySelectorAll(selectorParts.join(","));
+        for (var j = 0; j < links.length; j++) {
+          var row3 = links[j].closest(
+            ".cart-item, .cart__row, li, tr, .cart-item__row, .cart-line-item"
+          );
+          if (row3) {
+            log("Found row via URL/handle", item.url || handle, row3);
+            return row3;
+          }
         }
       }
     }
@@ -164,7 +178,7 @@
       'input[name="updates[]"]',
       'input[name^="updates["]',
       'input[data-quantity-input]',
-      'input[type="number"]',
+      'input[type="number"]'
     ];
 
     for (var i = 0; i < selectors.length; i++) {
@@ -248,7 +262,7 @@
           return row
             ? {
                 row: row,
-                item: entry.item,
+                item: entry.item
               }
             : null;
         })
@@ -273,18 +287,58 @@
       var header = rows[0];
       var children = rows.slice(1);
 
-      log(
-        "Building bundle wrapper",
-        bundleKey,
-        "header:",
-        header.row,
-        "children:",
-        children.map(function (c) {
-          return c.row;
-        })
-      );
+      // ----- make header row represent the whole bundle -----
 
-      // Create wrapper
+      var headerItem = header.item;
+
+      // 1) Bundle title (from line item properties if available)
+      var bundleTitle =
+        (headerItem.properties && headerItem.properties.Bundle) ||
+        headerItem.product_title ||
+        headerItem.title ||
+        "Bundle";
+
+      // 2) Bundle total = sum of all line prices in this group
+      var bundleTotalCents = rows.reduce(function (sum, r) {
+        var it = r.item;
+        var cents =
+          it.final_line_price != null
+            ? it.final_line_price
+            : it.line_price != null
+            ? it.line_price
+            : 0;
+
+        var parsed = parseInt(cents, 10);
+        if (isNaN(parsed)) parsed = 0;
+        return sum + parsed;
+      }, 0);
+
+      // 3) Update header row title
+      var nameContainer = findTitleArea(header.row);
+      if (nameContainer) {
+        nameContainer.textContent = "Bundle: " + bundleTitle;
+      }
+
+      // 4) Update header row price to show bundle total
+      var priceEl =
+        header.row.querySelector(
+          ".cart-item__total-price, .cart-item__price, .cart__price, [data-cart-item-line-price]"
+        ) || header.row.querySelector(".cart__price-wrapper, .cart-price");
+
+      if (priceEl) {
+        priceEl.textContent = formatMoney(bundleTotalCents);
+      }
+
+      // 5) Hide meta (Bundle / Component) on the header row only
+      var metaEl = header.row.querySelector(
+        ".cart-item__meta, .cart__meta-text, .product__description-list"
+      );
+      if (metaEl) {
+        metaEl.style.display = "none";
+      }
+
+      // ----- wrapper + accordion -----
+
       var wrapper = document.createElement("div");
       wrapper.className = "sb-cart-bundle";
       var parentNode = header.row.parentNode;
@@ -354,14 +408,15 @@
           });
 
           log("Synced child quantities for bundle", bundleKey);
+          // Theme handles the actual form submit / cart update.
         });
       }
     });
   }
 
   onReady(function () {
-    // enable logging if needed
-    // window.SB_CART_DEBUG = true;
+    // Enable console debug logs by uncommenting:
+    window.SB_CART_DEBUG = true;
     initSmartBundlesCart();
   });
 })();
