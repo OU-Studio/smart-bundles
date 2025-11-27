@@ -510,36 +510,34 @@
         );
 
         var variant = null;
-        if (variantId && item.product && Array.isArray(item.product.variants)) {
-          variant = item.product.variants.find(function (v) {
-            return String(v.id) === String(variantId);
-          });
-        }
+if (variantId && item.product && Array.isArray(item.product.variants)) {
+  variant = item.product.variants.find(function (v) {
+    return String(v.id) === String(variantId);
+  });
+}
 
-        var quantityBase = item.quantity || 1;
-        var rawPrice = variant ? Number(variant.price) : 0;
-if (isNaN(rawPrice)) rawPrice = 0;
+var quantityBase = item.quantity || 1;
 
-// If it's in cents already (e.g. 4995) keep it;
-// if it's in units (e.g. 49.95) convert to cents.
-var priceCents =
-  rawPrice > 1000 ? rawPrice : Math.round(rawPrice * 100);
-        var lineSubtotalCents = priceCents * quantityBase;
+// Shopify /products/{handle}.js returns price in cents (integer)
+var priceCents = 0;
+if (variant && variant.price != null) {
+  priceCents = parseInt(variant.price, 10);
+  if (isNaN(priceCents)) priceCents = 0;
+}
 
-        bundleSubtotalCents += lineSubtotalCents;
+var lineSubtotalCents = priceCents * quantityBase;
+bundleSubtotalCents += lineSubtotalCents;
 
-        if (itemPriceEl) {
-          if (variant) {
-            itemPriceEl.textContent =
-              formatMoney(priceCents) +
-              (quantityBase > 1
-                ? " × " + quantityBase
-                : "");
-          } else {
-            itemPriceEl.textContent = "—";
-          }
-        }
-      });
+if (itemPriceEl) {
+  if (variant) {
+    itemPriceEl.textContent =
+      formatMoney(priceCents) +
+      (quantityBase > 1 ? " × " + quantityBase : "");
+  } else {
+    itemPriceEl.textContent = "—";
+  }
+}
+
 
       var bundleQty = getBundleQuantity(outputEl);
       var totalCents = bundleSubtotalCents * bundleQty;
